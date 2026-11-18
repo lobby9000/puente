@@ -25,7 +25,7 @@ The naive script is what a quick cron job looks like: batches of 100, three trie
 
 ```mermaid
 flowchart LR
-    S[Gold table<br/>CSV now, Databricks next] --> P[Prepare<br/>dedupe, map payees,<br/>check the contract]
+    S[Gold table<br/>Databricks or a CSV export] --> P[Prepare<br/>dedupe, map payees,<br/>check the contract]
     P -- defective row --> R[(Review queue)]
     P --> B[Batches of 100<br/>Idempotency-Key from content]
     B --> API{Payouts API}
@@ -70,16 +70,43 @@ python -m puente runs
 
 Settings come from environment variables or a `.env` file, see [.env.example](.env.example).
 
+## Databricks source (stage 2)
+
+The gold table can also come from Databricks. Two raw files, about 293,000 sale events and a commission plan, go to a Unity Catalog volume, and three SQL steps build the layers:
+
+| Layer | Tables | What it does |
+|---|---|---|
+| Bronze | `bronze_sales`, `bronze_comp_plan` | The files as they arrived, every column as text |
+| Silver | `silver_sales`, `silver_comp_plan` | Typed columns and one row per sale |
+| Gold | `gold_vendor_commissions` | One commission per rep and month |
+
+Here the defects start upstream, and each one reaches gold the way it would in production. A sale exported twice is removed in silver. A rep listed twice in the plan with two rates produces two gold rows for one key. Sales by a rep missing from the plan stay visible with no rate, because gold uses a LEFT JOIN. Refunds larger than a month's sales, a month imported in cents, wrong currencies and reps the payouts tool does not know yet all reach Puente, which parks each one with its reason. The SQL in [warehouse/](warehouse/) is tested on DuckDB against a Python reference, row by row.
+
+Setup on Databricks Free Edition:
+
+1. Create a personal access token: your user menu, Settings, Developer, Access tokens.
+2. Copy the server hostname and HTTP path of the Serverless Starter Warehouse (SQL Warehouses, Connection details).
+3. Put the three values in `.env`, as in [.env.example](.env.example).
+
+```bash
+pip install -e ".[dev,databricks]"
+python -m demo.databricks_setup       # uploads the raw files, builds bronze, silver and gold, checks gold row by row
+docker compose up -d
+python -m puente sync --source databricks
+python -m puente reconcile --source databricks
+```
+
 ## Layout
 
 ```
 puente/      the connector: client, retry policy, circuit breaker, transform, sync, replay, reconcile, CLI
 mock_saas/   the destination: a FastAPI app with OAuth, rate limits, pagination and failure injection
-demo/        synthetic data with ground truth, the naive baseline and the benchmark
+warehouse/   bronze, silver and gold SQL for Databricks, also run on DuckDB in the tests
+demo/        synthetic data with ground truth, the naive baseline, the benchmark and the Databricks setup
 tests/       unit tests for each piece, plus end-to-end runs under failure injection
 ```
 
-The connector depends on httpx and pydantic. The mock adds FastAPI and uvicorn. State lives in SQLite from the standard library.
+The connector depends on httpx and pydantic. The mock adds FastAPI and uvicorn, and the Databricks source adds databricks-sql-connector. State lives in SQLite from the standard library.
 
 ## Design notes
 
@@ -92,7 +119,7 @@ The connector depends on httpx and pydantic. The mock adds FastAPI and uvicorn. 
 ## Roadmap
 
 - [x] Stage 1: resilient core, mock SaaS and chaos benchmark
-- [ ] Stage 2: Databricks Free Edition as the source, with Spark SQL building the gold table
+- [ ] Stage 2: Databricks Free Edition as the source, with SQL building bronze, silver and gold (built, first live run pending)
 - [ ] Stage 3: Zoho CRM Developer Edition as the system of record for sales reps
 - [ ] Stage 4: data-quality checks and a human approval gate before any batch is sent
 - [ ] Stage 5: Slack alerts and run metrics

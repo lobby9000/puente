@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -32,6 +32,15 @@ class Settings:
     timeout_s: float = 2.0
     max_attempts: int = 6
     max_elapsed_s: float = 30.0
+    # Databricks, read under the names Databricks tools use. The token never shows in a repr.
+    databricks_host: str = ""
+    databricks_http_path: str = ""
+    databricks_token: str = field(default="", repr=False)
+    databricks_table: str = "workspace.puente.gold_vendor_commissions"
+
+    def missing_databricks_settings(self) -> list[str]:
+        values = (("DATABRICKS_HOST", self.databricks_host), ("DATABRICKS_HTTP_PATH", self.databricks_http_path), ("DATABRICKS_TOKEN", self.databricks_token))
+        return [name for name, value in values if not value]
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -51,4 +60,8 @@ class Settings:
             timeout_s=get("timeout_s", cls.timeout_s, float),
             max_attempts=get("max_attempts", cls.max_attempts, int),
             max_elapsed_s=get("max_elapsed_s", cls.max_elapsed_s, float),
+            databricks_host=os.environ.get("DATABRICKS_HOST", "").strip(),
+            databricks_http_path=os.environ.get("DATABRICKS_HTTP_PATH", "").strip(),
+            databricks_token=os.environ.get("DATABRICKS_TOKEN", "").strip(),
+            databricks_table=get("databricks_table", cls.databricks_table),
         )

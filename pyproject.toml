@@ -15,7 +15,8 @@ dependencies = [
 
 [project.optional-dependencies]
 mock = ["fastapi>=0.110", "uvicorn>=0.29"]
-dev = ["fastapi>=0.110", "uvicorn>=0.29", "pytest>=8"]
+databricks = ["databricks-sql-connector>=3.0"]
+dev = ["fastapi>=0.110", "uvicorn>=0.29", "pytest>=8", "duckdb>=1.0"]
 
 [project.scripts]
 puente = "puente.cli:main"

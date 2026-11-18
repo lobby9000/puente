@@ -1,10 +1,13 @@
 """Command line.
 
-    python -m puente sync --source FILE       deliver a CSV export, then replay transient failures
-    python -m puente replay                   retry review items that failed for transient reasons
-    python -m puente review                   show the open review queue
-    python -m puente runs                     show recent runs
-    python -m puente reconcile --source FILE  account for every key in source, destination and review
+    python -m puente sync --source SOURCE       deliver rows, then replay transient failures
+    python -m puente replay                     retry review items that failed for transient reasons
+    python -m puente review                     show the open review queue
+    python -m puente runs                       show recent runs
+    python -m puente reconcile --source SOURCE  account for every key in source, destination and review
+
+SOURCE is a CSV export of the gold table, or the word databricks to read the gold
+table from a Databricks SQL warehouse (settings in .env).
 """
 
 from __future__ import annotations
@@ -23,6 +26,20 @@ from .retry import RetryPolicy
 from .sources import CsvSource
 from .state import REPLAYABLE, StateStore
 from .sync import RunSummary, run_replay, run_sync
+from .warehouse import DatabricksSource
+from .warehouse import connect as connect_databricks
+
+
+def make_source(name: str, settings: Settings) -> CsvSource | DatabricksSource:
+    if name != "databricks":
+        return CsvSource(name)
+    missing = settings.missing_databricks_settings()
+    if missing:
+        raise PuenteError(f"set {', '.join(missing)} in .env to read from Databricks")
+    return DatabricksSource(
+        settings.databricks_table,
+        connect=lambda: connect_databricks(settings.databricks_host, settings.databricks_http_path, settings.databricks_token),
+    )
 
 
 def build_client(settings: Settings) -> SaaSClient:
@@ -91,15 +108,15 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("-v", "--verbose", action="store_true", help="print info logs to the console")
     parser = argparse.ArgumentParser(prog="puente", description="Deliver warehouse rows to a SaaS API without losing or duplicating them.")
     commands = parser.add_subparsers(dest="command", required=True)
-    sync = commands.add_parser("sync", parents=[common], help="deliver a CSV export to the destination")
-    sync.add_argument("--source", required=True)
+    sync = commands.add_parser("sync", parents=[common], help="deliver the gold table to the destination")
+    sync.add_argument("--source", required=True, help="a CSV export, or databricks")
     sync.add_argument("--no-replay", action="store_true", help="skip the automatic replay of transient failures")
     commands.add_parser("replay", parents=[common], help="retry review items that failed for transient reasons")
     review = commands.add_parser("review", parents=[common], help="show the open review queue")
     review.add_argument("--limit", type=int, default=10)
     commands.add_parser("runs", parents=[common], help="show recent runs")
     check = commands.add_parser("reconcile", parents=[common], help="check source, destination and review queue against each other")
-    check.add_argument("--source", required=True)
+    check.add_argument("--source", required=True, help="a CSV export, or databricks")
     args = parser.parse_args(argv)
 
     settings = Settings.from_env()
@@ -107,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     store = StateStore(settings.state_db)
     try:
         if args.command == "sync":
-            source = CsvSource(args.source)
+            source = make_source(args.source, settings)
             with build_client(settings) as client:
                 summary = run_sync(client, store, source.rows(), source=source.describe(), batch_size=settings.batch_size, auto_replay=not args.no_replay)
             print_run(summary)
@@ -121,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "runs":
             print_runs(store)
         elif args.command == "reconcile":
-            rows = list(CsvSource(args.source).rows())
+            rows = list(make_source(args.source, settings).rows())
             with build_client(settings) as client:
                 result = reconcile(rows, client.iter_payouts(), store.open_items())
             print_reconciliation(result)
@@ -131,6 +148,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except PuenteError as exc:
         print(f"run failed: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # a driver or network error from the source, for example
+        print(f"run failed: {type(exc).__name__}: {exc} (details in {settings.log_file})", file=sys.stderr)
         return 1
     finally:
         store.close()
