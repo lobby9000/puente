@@ -25,11 +25,15 @@ def normalize_host(host: str) -> str:
 
 
 def connect(host: str, http_path: str, token: str):
+    host = normalize_host(host)
+    if "." not in host or not http_path.startswith("/sql/"):
+        # Catch typos up front: the driver would keep retrying a wrong address for minutes.
+        raise PuenteError("DATABRICKS_HOST should look like dbc-1234.cloud.databricks.com and DATABRICKS_HTTP_PATH like /sql/1.0/warehouses/abcd1234")
     try:
         from databricks import sql
     except ImportError as exc:
         raise PuenteError('install the Databricks extra first: pip install -e ".[databricks]"') from exc
-    return sql.connect(server_hostname=normalize_host(host), http_path=http_path, access_token=token)
+    return sql.connect(server_hostname=host, http_path=http_path, access_token=token)
 
 
 class DatabricksSource:
