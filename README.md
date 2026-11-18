@@ -82,6 +82,15 @@ The gold table can also come from Databricks. Two raw files, about 293,000 sale 
 
 Here the defects start upstream, and each one reaches gold the way it would in production. A sale exported twice is removed in silver. A rep listed twice in the plan with two rates produces two gold rows for one key. Sales by a rep missing from the plan stay visible with no rate, because gold uses a LEFT JOIN. Refunds larger than a month's sales, a month imported in cents, wrong currencies and reps the payouts tool does not know yet all reach Puente, which parks each one with its reason. The SQL in [warehouse/](warehouse/) is tested on DuckDB against a Python reference, row by row.
 
+First live run, on Databricks Free Edition on November 18, 2026: silver removed the 877 repeated sale events, and gold matched the local reference on all 10,320 rows. A sync from that gold table to the mock in Docker delivered 10,093 payouts and parked 227 rows for review, each with its reason. The reconciliation afterwards found 0 rows lost, 0 paid twice and 0 with a wrong amount.
+
+| Reason parked | Rows |
+|---|---:|
+| Unknown rep (not in the payouts tool yet) | 96 |
+| Invalid row (wrong currency, no rate, commission at or below zero) | 63 |
+| Two different rows for one rep and month | 48 |
+| Rejected by the destination (over the per-line cap) | 20 |
+
 Setup on Databricks Free Edition:
 
 1. Create a personal access token: your user menu, Settings, Developer, Access tokens.
@@ -119,7 +128,7 @@ The connector depends on httpx and pydantic. The mock adds FastAPI and uvicorn, 
 ## Roadmap
 
 - [x] Stage 1: resilient core, mock SaaS and chaos benchmark
-- [ ] Stage 2: Databricks Free Edition as the source, with SQL building bronze, silver and gold (built, first live run pending)
+- [x] Stage 2: Databricks Free Edition as the source, with SQL building bronze, silver and gold
 - [ ] Stage 3: Zoho CRM Developer Edition as the system of record for sales reps
 - [ ] Stage 4: data-quality checks and a human approval gate before any batch is sent
 - [ ] Stage 5: Slack alerts and run metrics
