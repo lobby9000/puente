@@ -1,0 +1,20 @@
+services:
+  mock-saas:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      MOCK_CLIENT_ID: puente-dev
+      MOCK_CLIENT_SECRET: dev-secret
+      MOCK_TOKEN_TTL_SECONDS: "300"
+      MOCK_RATE_LIMIT_CAPACITY: "20"
+      MOCK_RATE_LIMIT_REFILL_PER_S: "10"
+      # A mildly bad day. Set them to 0 for a well-behaved API.
+      MOCK_ERROR_RATE: "0.05"
+      MOCK_GHOST_WRITE_RATE: "0.03"
+      MOCK_SLOW_RATE: "0.02"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

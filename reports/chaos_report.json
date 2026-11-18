@@ -1,0 +1,138 @@
+{
+  "meta": {
+    "date": "2026-11-18",
+    "seed": 7,
+    "rows": 10326,
+    "vendors": 850,
+    "months": 12,
+    "payable": 10119,
+    "problems": 177
+  },
+  "chaos": {
+    "error_rate": 0.09,
+    "ghost_write_rate": 0.05,
+    "slow_rate": 0.05,
+    "slow_seconds": 3.0,
+    "auth_error_rate": 0.02,
+    "outage_at_request": 30,
+    "outage_seconds": 30,
+    "seed": 2026
+  },
+  "scores": {
+    "naive": {
+      "payable": 10119,
+      "delivered_once": 3320,
+      "payable_lost": 5997,
+      "payable_waiting": 0,
+      "keys_paid_twice": 804,
+      "extra_payouts": 904,
+      "problems": 177,
+      "problems_sent": 4,
+      "problems_right_reason": 0,
+      "problems_vanished": 173,
+      "audit_clean": false,
+      "requests": 173,
+      "batch_requests": 164,
+      "injected": 21,
+      "injected_by_kind": {
+        "injected_errors": 6,
+        "injected_ghost_writes": 4,
+        "injected_slow": 8,
+        "injected_auth_errors": 3
+      },
+      "outage_rejections": 60,
+      "rate_limited": 0,
+      "elapsed_s": 57.4
+    },
+    "puente": {
+      "payable": 10119,
+      "delivered_once": 10119,
+      "payable_lost": 0,
+      "payable_waiting": 0,
+      "keys_paid_twice": 0,
+      "extra_payouts": 0,
+      "problems": 177,
+      "problems_sent": 0,
+      "problems_right_reason": 177,
+      "problems_vanished": 0,
+      "audit_clean": true,
+      "requests": 161,
+      "batch_requests": 149,
+      "injected": 16,
+      "injected_by_kind": {
+        "injected_errors": 8,
+        "injected_ghost_writes": 3,
+        "injected_slow": 4,
+        "injected_auth_errors": 1
+      },
+      "outage_rejections": 16,
+      "rate_limited": 7,
+      "elapsed_s": 51.8
+    }
+  },
+  "puente": {
+    "sync": {
+      "run_id": "sync-20261118T115325-815fca",
+      "kind": "sync",
+      "source": "benchmark",
+      "status": "completed",
+      "rows_in": 10326,
+      "lines_ready": 10139,
+      "lines_delivered": 9820,
+      "already_in_destination": 0,
+      "exact_duplicates_dropped": 20,
+      "review_added": {
+        "unmapped_payee": 96,
+        "invalid_contract": 51,
+        "conflicting_duplicate": 20,
+        "rejected_by_destination": 19,
+        "retries_exhausted": 300
+      },
+      "review_resolved": 0,
+      "batches_delivered": 99,
+      "batches_split": 17,
+      "idempotent_replays": 6,
+      "breaker_opened": 1,
+      "retries": 35,
+      "token_fetches": 3,
+      "duration_s": 49.42,
+      "replay_run_id": "replay-20261118T115415-05bd03"
+    },
+    "replay": {
+      "run_id": "replay-20261118T115415-05bd03",
+      "kind": "replay",
+      "source": "review_queue",
+      "status": "completed",
+      "rows_in": 300,
+      "lines_ready": 300,
+      "lines_delivered": 299,
+      "already_in_destination": 0,
+      "exact_duplicates_dropped": 0,
+      "review_added": {
+        "rejected_by_destination": 1
+      },
+      "review_resolved": 299,
+      "batches_delivered": 0,
+      "batches_split": 0,
+      "idempotent_replays": 1,
+      "breaker_opened": 1,
+      "retries": 1,
+      "token_fetches": 0,
+      "duration_s": 2.31,
+      "replay_run_id": null
+    }
+  },
+  "naive": {
+    "lines_sent": 10230,
+    "batches_ok": 41,
+    "batches_failed": 62,
+    "duration_s": 57.4
+  },
+  "expected": {
+    "paid": 10119,
+    "review:conflicting_duplicate": 10,
+    "review:invalid_contract": 51,
+    "review:rejected_by_destination": 20,
+    "review:unmapped_payee": 96
+  }
+}
