@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mock = ["fastapi>=0.110", "uvicorn>=0.29"]
-databricks = ["databricks-sql-connector>=3.0"]
+databricks = ["databricks-sql-connector>=3.0", "pyarrow>=14"]  # pyarrow: faster fetches, and no warning on connector 4.x
 dev = ["fastapi>=0.110", "uvicorn>=0.29", "pytest>=8", "duckdb>=1.0"]
 
 [project.scripts]

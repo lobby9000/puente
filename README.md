@@ -129,7 +129,18 @@ What the Zoho client ([puente/zoho.py](puente/zoho.py)) takes care of:
 
 The tests run against a fake Zoho ([mock_zoho/](mock_zoho/)) that follows the documented behaviour of API v8 and injects throttling, errors, lost answers after a write and revoked tokens. It also runs in Docker on port 8001, so this stage works without a Zoho account.
 
-The demo load ([demo/zoho_seed.py](demo/zoho_seed.py)) puts 154 stores and 857 reps in the CRM, with defects of its own: two reps on hold, a Payee_ID copied from another rep, a Payee_ID with a typo, a rep missing from the CRM and the 8 new reps whose payout account is not open yet. Against the fake, the sync delivered 10,033 payouts and parked 60 more business keys than stage 2, each with the reason expected for it. The reconciliation found 0 lost and 0 paid twice, and reading the contacts cost 5 credits.
+The demo load ([demo/zoho_seed.py](demo/zoho_seed.py)) puts 154 stores and 857 reps in the CRM, with defects of its own: two reps on hold, a Payee_ID copied from another rep, a Payee_ID with a typo, a rep missing from the CRM and the 8 new reps whose payout account is not open yet. The same run passes in the tests against the fake.
+
+First run on a Zoho CRM Developer Edition, on November 18, 2026: `zoho setup` created the four fields for 45 credits, and the load put 154 stores and 857 reps in the CRM for 104 credits. The sync then read the gold table from Databricks and 867 contacts from Zoho, skipping the 10 that have no Vendor_Code. It delivered 10,033 payouts and parked 287 rows, and each of the 10,296 business keys ended where the expected outcome put it. The reconciliation found 0 rows lost, 0 paid twice and 0 with a wrong amount, and reading the contacts cost 5 credits.
+
+| Reason parked | Rows |
+|---|---:|
+| No usable payee (not in Zoho, no Payee_ID, or an account the payouts tool lacks) | 120 |
+| Invalid row (wrong currency, no rate, commission at or below zero) | 63 |
+| Two different rows for one rep and month | 48 |
+| Rep on hold in Zoho | 24 |
+| Rejected by the destination (over the per-line cap) | 20 |
+| Payee_ID copied from another rep | 12 |
 
 Setup on a Zoho CRM Developer Edition:
 
@@ -174,7 +185,7 @@ The connector depends on httpx and pydantic. The mock adds FastAPI and uvicorn, 
 
 - [x] Stage 1: resilient core, mock SaaS and chaos benchmark
 - [x] Stage 2: Databricks Free Edition as the source, with SQL building bronze, silver and gold
-- [x] Stage 3: Zoho CRM as the system of record for sales reps (tested against the fake; first run on a Developer Edition next)
+- [x] Stage 3: Zoho CRM Developer Edition as the system of record for sales reps
 - [ ] Stage 4: data-quality checks and a human approval gate before any batch is sent
 - [ ] Stage 5: Slack alerts and run metrics
 - [ ] Stage 6: AI-assisted field mapping for onboarding a new SaaS, and triage of the review queue. The model only proposes: validation and a person approve, and the model never writes to the destination.
