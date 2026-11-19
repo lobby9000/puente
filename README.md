@@ -190,4 +190,14 @@ The connector depends on httpx and pydantic. The mock adds FastAPI and uvicorn, 
 - [ ] Stage 5: Slack alerts and run metrics
 - [ ] Stage 6: AI-assisted field mapping for onboarding a new SaaS, and triage of the review queue. The model only proposes: validation and a person approve, and the model never writes to the destination.
 
-All data is synthetic.
+## How it was built
+
+Built with Claude Code as a coding agent, one stage at a time. Each stage was run and checked before the next one started, and stages 2 and 3 ran on real Databricks Free Edition and Zoho CRM Developer Edition accounts.
+
+## Licence
+
+Code released under the [MIT licence](LICENSE). All data is synthetic.
+
+---
+
+Part of the portfolio of Luis Ángel Quiroz López · [lobby9000.github.io](https://lobby9000.github.io) · [LinkedIn](https://www.linkedin.com/in/llqq) · [GitHub](https://github.com/lobby9000)
