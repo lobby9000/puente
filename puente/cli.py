@@ -5,22 +5,29 @@
     python -m puente review                     show the open review queue
     python -m puente runs                       show recent runs
     python -m puente reconcile --source SOURCE  account for every key in source, destination and review
+    python -m puente zoho auth                  trade a Zoho Self Client grant code for a refresh token
+    python -m puente zoho check                 show the Zoho org and whether Puente's fields exist
+    python -m puente zoho setup                 create the custom fields Puente needs in Zoho
 
 SOURCE is a CSV export of the gold table, or the word databricks to read the gold
-table from a Databricks SQL warehouse (settings in .env).
+table from a Databricks SQL warehouse (settings in .env). sync --payees zoho maps
+sales reps to payees with the contacts in Zoho CRM instead of the destination.
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import logging
 import sys
+from collections.abc import Callable
 
 from .client import SaaSClient
-from .config import Settings
+from .config import Settings, set_env_values
 from .errors import AuthError, PuenteError
 from .log import setup_logging
+from .payees import CONTACT_FIELDS, PayeeDirectory, from_zoho
 from .reconcile import Reconciliation, reconcile
 from .retry import RetryPolicy
 from .sources import CsvSource
@@ -28,6 +35,8 @@ from .state import REPLAYABLE, StateStore
 from .sync import RunSummary, run_replay, run_sync
 from .warehouse import DatabricksSource
 from .warehouse import connect as connect_databricks
+from .zoho import SCOPES, CreditMeter, ZohoClient
+from .zoho_setup import FieldCheck, check_fields, ensure_fields
 
 
 def make_source(name: str, settings: Settings) -> CsvSource | DatabricksSource:
@@ -47,6 +56,72 @@ def build_client(settings: Settings) -> SaaSClient:
     return SaaSClient(settings.saas_url, settings.client_id, settings.client_secret, timeout_s=settings.timeout_s, retry=policy)
 
 
+def build_zoho(settings: Settings, *, need_refresh_token: bool = True) -> ZohoClient:
+    missing = settings.missing_zoho_settings(need_refresh_token)
+    if missing:
+        raise PuenteError(f"set {', '.join(missing)} in .env to reach Zoho CRM")
+    return ZohoClient(
+        settings.zoho_client_id,
+        settings.zoho_client_secret,
+        settings.zoho_refresh_token,
+        accounts_url=settings.zoho_accounts_url,
+        api_domain=settings.zoho_api_domain,
+        timeout_s=settings.zoho_timeout_s,
+        retry=RetryPolicy(max_attempts=settings.max_attempts, max_elapsed_s=settings.max_elapsed_s),
+        credits=CreditMeter(budget=settings.zoho_credit_budget, reserve=settings.zoho_credit_reserve),
+    )
+
+
+def zoho_payees(zoho: ZohoClient, client: SaaSClient) -> Callable[[], PayeeDirectory]:
+    return lambda: from_zoho(zoho.iter_records("Contacts", CONTACT_FIELDS), client.list_payees())
+
+
+def print_credits(zoho: ZohoClient) -> None:
+    left = f", {zoho.credits.remaining:,} left for the org today" if zoho.credits.remaining is not None else ""
+    print(f"zoho credits used: {zoho.credits.used:,} of a budget of {zoho.credits.budget:,}{left}")
+
+
+def print_fields(checks: list[FieldCheck]) -> None:
+    for check in checks:
+        spec = check.spec
+        note = f"  {check.detail}" if check.detail else ""
+        print(f"  {spec.module + '.' + spec.api_name:<22}{check.status:<9}{note}")
+
+
+def zoho_auth(settings: Settings, env_path: str = ".env", read_code: Callable[[str], str] = getpass.getpass) -> None:
+    if settings.missing_zoho_settings(need_refresh_token=False):
+        raise PuenteError("set ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET in .env first (api-console.zoho.com > Self Client > Client Secret)")
+    print("In api-console.zoho.com open your Self Client, tab Generate Code, and fill in:")
+    print(f"  Scope          {','.join(SCOPES)}")
+    print("  Time Duration  10 minutes")
+    print("  Description    Puente")
+    print("Press Create, choose your Developer Edition org and copy the code.")
+    code = read_code("Paste the code here (it is not shown): ").strip()
+    if not code:
+        raise PuenteError("no code given")
+    with build_zoho(settings, need_refresh_token=False) as zoho:
+        body = zoho.exchange_grant_code(code)
+        api_domain = zoho.api_domain
+    set_env_values(env_path, {"ZOHO_REFRESH_TOKEN": body["refresh_token"], "ZOHO_API_DOMAIN": api_domain})
+    print(f"saved ZOHO_REFRESH_TOKEN (not shown) and ZOHO_API_DOMAIN={api_domain} in {env_path}")
+    if body.get("scope"):
+        print(f"scopes granted: {body['scope']}")
+
+
+def zoho_fields(settings: Settings, create: bool) -> int:
+    with build_zoho(settings) as zoho:
+        org = zoho.get_org()
+        print(f"org: {org.get('company_name') or org.get('id') or '(no name)'} at {zoho.api_domain}")
+        checks = ensure_fields(zoho) if create else check_fields(zoho)
+        print_fields(checks)
+        print_credits(zoho)
+    if all(check.usable for check in checks):
+        print("ready")
+        return 0
+    print("run python -m puente zoho setup" if not create else "some fields could not be created, see above")
+    return 4
+
+
 def print_run(summary: RunSummary) -> None:
     print(f"{summary.kind} {summary.run_id}: {summary.status} in {summary.duration_s:.1f} s")
     for label, value in (
@@ -63,6 +138,12 @@ def print_run(summary: RunSummary) -> None:
         print(f"  {label:<28}{value:>8,}")
     for reason, count in sorted(summary.review_added.items()):
         print(f"      {reason:<24}{count:>8,}")
+    if summary.payee_source != "destination":
+        stats = summary.payee_stats
+        print(f"  payees from {summary.payee_source}: {stats.get('contacts_read', 0):,} contacts read, {stats.get('usable', 0):,} reps can be paid")
+        for key, count in stats.items():
+            if key.startswith("blocked:"):
+                print(f"      {key[len('blocked:'):]:<24}{count:>8,} reps")
 
 
 def print_review(store: StateStore, limit: int) -> None:
@@ -111,12 +192,18 @@ def main(argv: list[str] | None = None) -> int:
     sync = commands.add_parser("sync", parents=[common], help="deliver the gold table to the destination")
     sync.add_argument("--source", required=True, help="a CSV export, or databricks")
     sync.add_argument("--no-replay", action="store_true", help="skip the automatic replay of transient failures")
+    sync.add_argument("--payees", choices=("destination", "zoho"), help="where rep-to-payee mappings come from (default: PUENTE_PAYEES or destination)")
     commands.add_parser("replay", parents=[common], help="retry review items that failed for transient reasons")
     review = commands.add_parser("review", parents=[common], help="show the open review queue")
     review.add_argument("--limit", type=int, default=10)
     commands.add_parser("runs", parents=[common], help="show recent runs")
     check = commands.add_parser("reconcile", parents=[common], help="check source, destination and review queue against each other")
     check.add_argument("--source", required=True, help="a CSV export, or databricks")
+    zoho = commands.add_parser("zoho", help="connect to Zoho CRM (stage 3)")
+    zoho_commands = zoho.add_subparsers(dest="zoho_command", required=True)
+    zoho_commands.add_parser("auth", parents=[common], help="trade a Self Client grant code for a refresh token, saved in .env")
+    zoho_commands.add_parser("check", parents=[common], help="show the org and whether Puente's fields exist (3 credits)")
+    zoho_commands.add_parser("setup", parents=[common], help="create the missing fields (10 credits per field)")
     args = parser.parse_args(argv)
 
     settings = Settings.from_env()
@@ -125,11 +212,27 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "sync":
             source = make_source(args.source, settings)
-            with build_client(settings) as client:
-                summary = run_sync(client, store, source.rows(), source=source.describe(), batch_size=settings.batch_size, auto_replay=not args.no_replay)
+            payee_source = args.payees or settings.payees
+            zoho = build_zoho(settings) if payee_source == "zoho" else None
+            try:
+                with build_client(settings) as client:
+                    summary = run_sync(
+                        client,
+                        store,
+                        source.rows(),
+                        source=source.describe(),
+                        batch_size=settings.batch_size,
+                        auto_replay=not args.no_replay,
+                        payees=zoho_payees(zoho, client) if zoho else None,
+                    )
+            finally:
+                if zoho:
+                    zoho.close()
             print_run(summary)
             if summary.replay:
                 print_run(summary.replay)
+            if zoho:
+                print_credits(zoho)
         elif args.command == "replay":
             with build_client(settings) as client:
                 print_run(run_replay(client, store, batch_size=settings.batch_size))
@@ -143,6 +246,11 @@ def main(argv: list[str] | None = None) -> int:
                 result = reconcile(rows, client.iter_payouts(), store.open_items())
             print_reconciliation(result)
             return 0 if result.clean else 3
+        elif args.command == "zoho":
+            if args.zoho_command == "auth":
+                zoho_auth(settings)
+            else:
+                return zoho_fields(settings, create=args.zoho_command == "setup")
     except AuthError as exc:
         print(f"credentials refused: {exc}", file=sys.stderr)
         return 2

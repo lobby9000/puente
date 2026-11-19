@@ -8,3 +8,4 @@ build/
 data/
 state/
 logs/
+.env.tmp

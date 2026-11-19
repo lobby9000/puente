@@ -8,6 +8,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY puente ./puente
 COPY mock_saas ./mock_saas
+COPY mock_zoho ./mock_zoho
 COPY demo ./demo
 RUN pip install --no-cache-dir ".[mock]"
 

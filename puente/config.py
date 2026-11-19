@@ -8,6 +8,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def set_env_values(path: str | Path, values: dict[str, str]) -> None:
+    """Write KEY=value lines into a .env file, replacing those keys and keeping every other line.
+
+    The file is rewritten in one step and left readable by its owner only.
+    """
+    file = Path(path)
+    lines = file.read_text(encoding="utf-8").splitlines() if file.is_file() else []
+    pending = dict(values)
+    for index, raw in enumerate(lines):
+        key = raw.split("=", 1)[0].strip() if "=" in raw and not raw.lstrip().startswith("#") else None
+        if key in pending:
+            lines[index] = f"{key}={pending.pop(key)}"
+    lines.extend(f"{key}={value}" for key, value in pending.items())
+    temporary = file.with_name(file.name + ".tmp")
+    temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, file)
+
+
 def load_dotenv(path: str | Path = ".env") -> None:
     """Minimal .env support: KEY=value lines and # comments. The real environment wins."""
     file = Path(path)
@@ -37,6 +56,22 @@ class Settings:
     databricks_http_path: str = ""
     databricks_token: str = field(default="", repr=False)
     databricks_table: str = "workspace.puente.gold_vendor_commissions"
+    # Zoho CRM (stage 3). `python -m puente zoho auth` writes the refresh token and API domain.
+    zoho_client_id: str = ""
+    zoho_client_secret: str = field(default="", repr=False)
+    zoho_refresh_token: str = field(default="", repr=False)
+    zoho_accounts_url: str = "https://accounts.zoho.com"
+    zoho_api_domain: str = ""
+    zoho_timeout_s: float = 15.0
+    zoho_credit_budget: int = 500
+    zoho_credit_reserve: int = 1000
+    payees: str = "destination"  # where rep-to-payee mappings come from: destination or zoho
+
+    def missing_zoho_settings(self, need_refresh_token: bool = True) -> list[str]:
+        values = [("ZOHO_CLIENT_ID", self.zoho_client_id), ("ZOHO_CLIENT_SECRET", self.zoho_client_secret)]
+        if need_refresh_token:
+            values.append(("ZOHO_REFRESH_TOKEN", self.zoho_refresh_token))
+        return [name for name, value in values if not value]
 
     def missing_databricks_settings(self) -> list[str]:
         values = (("DATABRICKS_HOST", self.databricks_host), ("DATABRICKS_HTTP_PATH", self.databricks_http_path), ("DATABRICKS_TOKEN", self.databricks_token))
@@ -64,4 +99,13 @@ class Settings:
             databricks_http_path=os.environ.get("DATABRICKS_HTTP_PATH", "").strip(),
             databricks_token=os.environ.get("DATABRICKS_TOKEN", "").strip(),
             databricks_table=get("databricks_table", cls.databricks_table),
+            zoho_client_id=os.environ.get("ZOHO_CLIENT_ID", "").strip(),
+            zoho_client_secret=os.environ.get("ZOHO_CLIENT_SECRET", "").strip(),
+            zoho_refresh_token=os.environ.get("ZOHO_REFRESH_TOKEN", "").strip(),
+            zoho_accounts_url=os.environ.get("ZOHO_ACCOUNTS_URL", "").strip() or cls.zoho_accounts_url,
+            zoho_api_domain=os.environ.get("ZOHO_API_DOMAIN", "").strip(),
+            zoho_timeout_s=get("zoho_timeout_s", cls.zoho_timeout_s, float),
+            zoho_credit_budget=get("zoho_credit_budget", cls.zoho_credit_budget, int),
+            zoho_credit_reserve=get("zoho_credit_reserve", cls.zoho_credit_reserve, int),
+            payees=get("payees", cls.payees),
         )

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "puente"
 version = "0.1.0"
-description = "Deliver warehouse rows to SaaS APIs without losing or duplicating them: retries, idempotency, a review queue and reconciliation."
+description = "Deliver warehouse rows to SaaS APIs without losing or duplicating them: retries, idempotency, a review queue, reconciliation and a Zoho CRM payee mapping."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -22,7 +22,7 @@ dev = ["fastapi>=0.110", "uvicorn>=0.29", "pytest>=8", "duckdb>=1.0"]
 puente = "puente.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["puente*", "mock_saas*", "demo*"]
+include = ["puente*", "mock_saas*", "mock_zoho*", "demo*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

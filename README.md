@@ -26,6 +26,7 @@ The naive script is what a quick cron job looks like: batches of 100, three trie
 ```mermaid
 flowchart LR
     S[Gold table<br/>Databricks or a CSV export] --> P[Prepare<br/>dedupe, map payees,<br/>check the contract]
+    Z[Sales reps<br/>Zoho CRM] -. payee mapping .-> P
     P -- defective row --> R[(Review queue)]
     P --> B[Batches of 100<br/>Idempotency-Key from content]
     B --> API{Payouts API}
@@ -37,7 +38,7 @@ flowchart LR
     R -- replay after reconciling --> B
 ```
 
-1. **Prepare.** Exact copies of a row are dropped and logged. Two different rows for the same rep and month go to review, because only a person can say which one is right. Reps with no payee in the destination, and rows that break the destination's published contract, go to review too.
+1. **Prepare.** Exact copies of a row are dropped and logged. Two different rows for the same rep and month go to review, because only a person can say which one is right. Reps with no payee, reps on hold in the CRM, and rows that break the destination's published contract go to review too.
 2. **Send.** Lines go out in batches of 100. Each batch carries an Idempotency-Key derived from its content, so a retry after a timeout cannot be applied twice.
 3. **Retry what is transient.** 429, 5xx, timeouts and network errors are retried with exponential backoff and full jitter, or after exactly the wait that Retry-After asks for. A 401 refreshes the OAuth token and tries again. A 422 that names bad lines parks those lines and resends the rest.
 4. **Stop hammering.** When three batches in a row run out of retries, a circuit breaker opens, waits and lets one probe through before resuming.
@@ -105,13 +106,55 @@ python -m puente sync --source databricks
 python -m puente reconcile --source databricks
 ```
 
+## Zoho CRM (stage 3)
+
+From stage 3 on, the sales network lives in Zoho CRM, where Sales Ops keeps it up to date. Stores are Accounts and sales reps are Contacts, each with the code the warehouse uses. A rep's contact also holds the payout account the team captured for them and a hold flag. With `--payees zoho`, Puente reads the contacts before the sync and pays a rep only when Zoho and the payouts tool agree:
+
+| What Puente finds | What happens |
+|---|---|
+| Payout Hold checked by Sales Ops | parked as `payout_on_hold` |
+| No contact, no Payee_ID, or an account the payouts tool lacks or has closed | parked as `unmapped_payee`, with the cause in the detail |
+| An account opened for another rep, or claimed by two contacts | parked as `payee_mismatch` |
+| Both systems agree | paid, in the currency the payouts tool holds |
+
+The mismatch check exists for one case in particular: a Payee_ID copied from another rep's record. The payouts tool would accept that line, because the account is real and active, and the commission would go to the wrong person.
+
+What the Zoho client ([puente/zoho.py](puente/zoho.py)) takes care of:
+
+- **OAuth for a Self Client.** A grant code is exchanged once for a refresh token, which is stored only in `.env`. Access tokens are renewed before they expire, and the token answer names the data center to call.
+- **Retries.** 429, 5xx and network errors are retried with backoff, and a 401 gets a fresh token. A missing scope stops the run at once and says which scopes to ask for.
+- **Upsert by external key.** Stores are matched on Store_Code and reps on Vendor_Code, 100 records per call, with an answer per record. Because the match is on a unique field, a batch sent again after a lost answer updates the records it wrote instead of creating them twice.
+- **Pagination.** Pages of 200 with page and page_token, and the 204 that Zoho sends when there is nothing to read.
+- **API credits.** Zoho charges every call against a daily pool the whole organization shares. Each run gets its own budget, and the full cost of a load is checked before it starts. Once Zoho starts reporting the pool, Puente stops before the pool drops below a reserve left for other integrations.
+
+The tests run against a fake Zoho ([mock_zoho/](mock_zoho/)) that follows the documented behaviour of API v8 and injects throttling, errors, lost answers after a write and revoked tokens. It also runs in Docker on port 8001, so this stage works without a Zoho account.
+
+The demo load ([demo/zoho_seed.py](demo/zoho_seed.py)) puts 154 stores and 857 reps in the CRM, with defects of its own: two reps on hold, a Payee_ID copied from another rep, a Payee_ID with a typo, a rep missing from the CRM and the 8 new reps whose payout account is not open yet. Against the fake, the sync delivered 10,033 payouts and parked 60 more business keys than stage 2, each with the reason expected for it. The reconciliation found 0 lost and 0 paid twice, and reading the contacts cost 5 credits.
+
+Setup on a Zoho CRM Developer Edition:
+
+1. Sign up for the free Developer Edition. In [api-console.zoho.com](https://api-console.zoho.com), add a Self Client and copy its client ID and secret to `.env`.
+2. Run `python -m puente zoho auth`. It prints the scopes to paste under Generate Code, asks for the code without showing it, and writes the refresh token to `.env`.
+
+```bash
+python -m puente zoho auth          # once
+python -m puente zoho setup         # creates Store_Code, Vendor_Code, Payee_ID and Payout_Hold, about 45 credits
+python -m demo.zoho_seed            # loads stores and reps, about 105 credits
+python -m puente sync --source databricks --payees zoho
+python -m puente reconcile --source databricks
+python -m demo.zoho_seed --check    # every business key against its expected outcome
+```
+
+Without a Zoho account, the same commands work against the fake in Docker with `ZOHO_ACCOUNTS_URL=http://localhost:8001`, `ZOHO_CLIENT_ID=fake-client-id`, `ZOHO_CLIENT_SECRET=fake-client-secret` and `ZOHO_REFRESH_TOKEN=fake-refresh-token`.
+
 ## Layout
 
 ```
-puente/      the connector: client, retry policy, circuit breaker, transform, sync, replay, reconcile, CLI
+puente/      the connector: clients, retry policy, circuit breaker, payee mapping, transform, sync, replay, reconcile, CLI
 mock_saas/   the destination: a FastAPI app with OAuth, rate limits, pagination and failure injection
+mock_zoho/   a fake Zoho CRM with the API v8 behaviour Puente relies on, credits and failure injection
 warehouse/   bronze, silver and gold SQL for Databricks, also run on DuckDB in the tests
-demo/        synthetic data with ground truth, the naive baseline, the benchmark and the Databricks setup
+demo/        synthetic data with ground truth, the naive baseline, the benchmark, the Databricks setup and the Zoho load
 tests/       unit tests for each piece, plus end-to-end runs under failure injection
 ```
 
@@ -124,12 +167,14 @@ The connector depends on httpx and pydantic. The mock adds FastAPI and uvicorn, 
 - **Retry only what can change.** A 422 fails the same way every time, so it goes to review on the first answer. Retrying it would spend the rate limit and hide the problem.
 - **The contract lives on the client too.** Checking rows against the vendor's documented schema before sending keeps one bad row from sinking a batch of 100.
 - **Two kinds of review items.** Transient reasons (retries ran out, circuit open) are replayed by the machine. Data reasons (invalid row, unknown rep, conflicting duplicates, rejected by the destination) wait for a person.
+- **Money moves only when two systems agree.** Zoho says who is a rep and whether they may be paid. The payouts tool says whether the account exists, which currency it pays in and whom it was opened for. When they disagree, a person decides, because Puente cannot tell which system is wrong.
+- **API credits are shared.** The daily pool belongs to the whole organization, so a run that spends it freely can stop other integrations. Puente prices each call before making it and stops early rather than halfway.
 
 ## Roadmap
 
 - [x] Stage 1: resilient core, mock SaaS and chaos benchmark
 - [x] Stage 2: Databricks Free Edition as the source, with SQL building bronze, silver and gold
-- [ ] Stage 3: Zoho CRM Developer Edition as the system of record for sales reps
+- [x] Stage 3: Zoho CRM as the system of record for sales reps (tested against the fake; first run on a Developer Edition next)
 - [ ] Stage 4: data-quality checks and a human approval gate before any batch is sent
 - [ ] Stage 5: Slack alerts and run metrics
 - [ ] Stage 6: AI-assisted field mapping for onboarding a new SaaS, and triage of the review queue. The model only proposes: validation and a person approve, and the model never writes to the destination.

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pydantic import ValidationError
 
 from .contract import PayoutLine
+from .payees import PayeeDirectory
 from .sources import SourceRow
 
 
@@ -35,13 +36,17 @@ def memo_for(row: SourceRow) -> str | None:
     return f"{sales} financed sales at {store}" if store and sales else None
 
 
-def prepare(rows: Iterable[SourceRow], payee_by_vendor: dict[str, dict]) -> Prepared:
+def prepare(rows: Iterable[SourceRow], payees: PayeeDirectory | dict[str, dict]) -> Prepared:
     """Dedupe, map sales reps to payees and validate against the destination's contract.
+
+    payees is a PayeeDirectory (see payees.py), or a plain dict of vendor_code to
+    payee, read as the destination's own mapping.
 
     Nothing disappears quietly: an exact copy of a row is dropped and its line number
     logged, and every other problem becomes a rejection with a reason that the
     review queue keeps.
     """
+    directory = payees if isinstance(payees, PayeeDirectory) else PayeeDirectory(source="destination", payees=dict(payees))
     result = Prepared()
     by_key: dict[str, list[SourceRow]] = defaultdict(list)
     for row in rows:
@@ -65,9 +70,9 @@ def prepare(rows: Iterable[SourceRow], payee_by_vendor: dict[str, dict]) -> Prep
 
         row = unique[0]
         vendor = row.data.get("vendor_code", "")
-        payee = payee_by_vendor.get(vendor)
+        payee, reason, detail = directory.lookup(vendor)
         if payee is None:
-            result.rejections.append(Rejection(row, "unmapped_payee", f"sales rep {vendor or '(empty)'} has no active payee in the destination"))
+            result.rejections.append(Rejection(row, reason, detail))
             continue
         try:
             line = PayoutLine(

@@ -18,3 +18,20 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  mock-zoho:
+    build: .
+    command: ["uvicorn", "mock_zoho.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "8001:8001"
+    environment:
+      MOCK_ZOHO_API_DOMAIN: http://localhost:8001
+      # A mildly bad day for the CRM too. Set them to 0 for a well-behaved API.
+      MOCK_ZOHO_THROTTLE_RATE: "0.03"
+      MOCK_ZOHO_ERROR_RATE: "0.02"
+      MOCK_ZOHO_LOST_WRITE_RATE: "0.02"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

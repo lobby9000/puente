@@ -13,7 +13,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 import httpx
@@ -21,6 +21,7 @@ import httpx
 from .breaker import CircuitBreaker
 from .client import SaaSClient
 from .errors import AuthError, RetryExhausted
+from .payees import PayeeDirectory, from_destination
 from .sources import SourceRow
 from .state import REPLAYABLE, StateStore
 from .transform import prepare
@@ -65,6 +66,8 @@ class RunSummary:
     breaker_opened: int = 0
     retries: int = 0
     token_fetches: int = 0
+    payee_source: str = "destination"
+    payee_stats: dict[str, int] = field(default_factory=dict)
     duration_s: float = 0.0
     replay: RunSummary | None = None
 
@@ -198,7 +201,9 @@ def run_sync(
     batch_size: int = 100,
     breaker: CircuitBreaker | None = None,
     auto_replay: bool = True,
+    payees: Callable[[], PayeeDirectory] | None = None,
 ) -> RunSummary:
+    """payees builds the rep-to-payee mapping. By default it comes from the destination."""
     breaker = breaker or CircuitBreaker()
     summary = RunSummary(run_id=new_run_id("sync"), kind="sync", source=source)
     started, before = time.monotonic(), client.metrics.copy()
@@ -207,8 +212,10 @@ def run_sync(
     try:
         rows = list(rows)
         summary.rows_in = len(rows)
-        payees = {payee["vendor_code"]: payee for payee in client.list_payees() if payee.get("status") == "active"}
-        prepared = prepare(rows, payees)
+        directory = payees() if payees else from_destination(client.list_payees())
+        summary.payee_source = directory.source
+        summary.payee_stats = dict(sorted(directory.stats.items()))
+        prepared = prepare(rows, directory)
         summary.exact_duplicates_dropped = len(prepared.dropped_rows)
         if prepared.dropped_rows:
             log.info("exact_duplicates_dropped", extra={"run_id": summary.run_id, "source_rows": prepared.dropped_rows})

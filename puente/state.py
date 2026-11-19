@@ -12,7 +12,14 @@ from .sources import SourceRow
 # A machine can retry these on its own once the destination is healthy again.
 REPLAYABLE = ("retries_exhausted", "circuit_open", "run_aborted")
 # These need a person to fix the data or the setup first.
-NEEDS_A_PERSON = ("invalid_contract", "unmapped_payee", "conflicting_duplicate", "rejected_by_destination")
+NEEDS_A_PERSON = (
+    "invalid_contract",
+    "unmapped_payee",
+    "conflicting_duplicate",
+    "rejected_by_destination",
+    "payout_on_hold",
+    "payee_mismatch",
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
